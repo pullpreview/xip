@@ -2,11 +2,16 @@ package dnsserver
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +85,34 @@ func TestResolveDashedIPUseCases(t *testing.T) {
 	}
 }
 
+func TestResolveBlockedDomainReturnsRootIP(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocklist.csv")
+	if err := os.WriteFile(path, []byte("fqdn,reason\npreview-9-9-9-9.example.test,Malware\n"), 0o644); err != nil {
+		t.Fatalf("failed to write blocklist file: %v", err)
+	}
+
+	cfg := testConfig()
+	cfg.BlocklistPath = path
+	cfg.BlocklistReloadInterval = time.Minute
+	srv := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	rcode, answer, _ := srv.resolve(dns.Question{Name: "preview-9-9-9-9.example.test.", Qclass: dns.ClassINET, Qtype: dns.TypeA})
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("unexpected rcode: %d", rcode)
+	}
+	if len(answer) != 1 {
+		t.Fatalf("expected one A record, got %d", len(answer))
+	}
+
+	aRecord, ok := answer[0].(*dns.A)
+	if !ok {
+		t.Fatalf("expected A record, got %T", answer[0])
+	}
+	if got := aRecord.A.String(); got != "1.2.3.4" {
+		t.Fatalf("expected blocked domain to resolve to root IP, got %s", got)
+	}
+}
+
 func TestDashedIPv4ForName(t *testing.T) {
 	srv := newTestServer()
 
@@ -128,9 +161,10 @@ func TestDashedIPv4ForName(t *testing.T) {
 			ok:   false,
 		},
 		{
-			name: "outside zone",
-			host: "preview-1-2-3-4.example.org.",
-			ok:   false,
+			name:     "outside zone",
+			host:     "preview-1-2-3-4.example.org.",
+			expected: "1.2.3.4",
+			ok:       true,
 		},
 		{
 			name: "root domain",
@@ -225,15 +259,44 @@ func TestResolveNameserverARecord(t *testing.T) {
 	}
 }
 
-func TestResolveOutsideZoneIsRefused(t *testing.T) {
+func TestResolveOutsideZoneReturnsNXDomain(t *testing.T) {
 	srv := newTestServer()
 
 	rcode, answer, authority := srv.resolve(dns.Question{Name: "example.org.", Qclass: dns.ClassINET, Qtype: dns.TypeA})
-	if rcode != dns.RcodeRefused {
-		t.Fatalf("expected REFUSED, got %d", rcode)
+	if rcode != dns.RcodeNameError {
+		t.Fatalf("expected NXDOMAIN, got %d", rcode)
 	}
-	if len(answer) != 0 || len(authority) != 0 {
-		t.Fatalf("expected no records for REFUSED response")
+	if len(answer) != 0 {
+		t.Fatalf("expected no answers, got %d", len(answer))
+	}
+	if len(authority) != 1 {
+		t.Fatalf("expected SOA authority record, got %d", len(authority))
+	}
+	if _, ok := authority[0].(*dns.SOA); !ok {
+		t.Fatalf("expected SOA authority record, got %T", authority[0])
+	}
+}
+
+func TestResolveDashedIPOutsideZoneReturnsA(t *testing.T) {
+	srv := newTestServer()
+
+	rcode, answer, authority := srv.resolve(dns.Question{Name: "preview-1-2-3-4.example.org.", Qclass: dns.ClassINET, Qtype: dns.TypeA})
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("unexpected rcode: %d", rcode)
+	}
+	if len(authority) != 0 {
+		t.Fatalf("expected no authority records, got %d", len(authority))
+	}
+	if len(answer) != 1 {
+		t.Fatalf("expected one A record, got %d", len(answer))
+	}
+
+	aRecord, ok := answer[0].(*dns.A)
+	if !ok {
+		t.Fatalf("expected A record, got %T", answer[0])
+	}
+	if got := aRecord.A.String(); got != "1.2.3.4" {
+		t.Fatalf("expected 1.2.3.4, got %s", got)
 	}
 }
 
@@ -306,6 +369,100 @@ func TestHandleDNSRecordsMetricsEveryRequest(t *testing.T) {
 	}
 	if calls[1].fqdn != "" || calls[1].domain != "" {
 		t.Fatalf("unexpected second call payload: fqdn=%q domain=%q", calls[1].fqdn, calls[1].domain)
+	}
+}
+
+func TestHandleHTTPBlockedDomainShowsReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocklist.csv")
+	if err := os.WriteFile(path, []byte("fqdn,reason\nabuse.example.test,Abusive content\n"), 0o644); err != nil {
+		t.Fatalf("failed to write blocklist file: %v", err)
+	}
+
+	cfg := testConfig()
+	cfg.BlocklistPath = path
+	cfg.BlocklistReloadInterval = time.Minute
+	srv := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "http://abuse.example.test/", nil)
+	req.Host = "abuse.example.test"
+	rec := httptest.NewRecorder()
+
+	srv.handleHTTP(rec, req)
+	resp := rec.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnavailableForLegalReasons {
+		t.Fatalf("expected status %d, got %d", http.StatusUnavailableForLegalReasons, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response body: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "Abusive content") {
+		t.Fatalf("expected reason to appear in body, got %q", text)
+	}
+	if !strings.Contains(text, "support@pullpreview.com") {
+		t.Fatalf("expected support contact in body")
+	}
+}
+
+func TestHandleHTTPHealthReturnsBlocklistStats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocklist.csv")
+	if err := os.WriteFile(path, []byte("fqdn,reason\na.example.test,Abuse\nb.example.test,Spam\n"), 0o644); err != nil {
+		t.Fatalf("failed to write blocklist file: %v", err)
+	}
+
+	cfg := testConfig()
+	cfg.BlocklistPath = path
+	cfg.BlocklistReloadInterval = time.Minute
+	srv := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/health", nil)
+	req.Host = "example.test"
+	rec := httptest.NewRecorder()
+
+	srv.handleHTTP(rec, req)
+	resp := rec.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	var payload struct {
+		BlockedDomains int    `json:"blocked_domains"`
+		LastReloadTime string `json:"last_reload_time"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("failed to decode health response: %v", err)
+	}
+
+	if payload.BlockedDomains != 2 {
+		t.Fatalf("expected blocked_domains=2, got %d", payload.BlockedDomains)
+	}
+	if payload.LastReloadTime == "" {
+		t.Fatalf("expected last_reload_time to be set")
+	}
+}
+
+func TestAllowCertificateHostAllowsInZoneHost(t *testing.T) {
+	srv := newTestServer()
+
+	if err := srv.allowCertificateHost(context.Background(), "My.Example.Test"); err != nil {
+		t.Fatalf("expected in-zone host to be allowed, got error: %v", err)
+	}
+	if err := srv.allowCertificateHost(context.Background(), "foo.bar.example.test."); err != nil {
+		t.Fatalf("expected nested in-zone host to be allowed, got error: %v", err)
+	}
+}
+
+func TestAllowCertificateHostRejectsOutsideZoneHost(t *testing.T) {
+	srv := newTestServer()
+
+	if err := srv.allowCertificateHost(context.Background(), "outside.example.org"); err == nil {
+		t.Fatalf("expected outside-zone host to be rejected")
 	}
 }
 

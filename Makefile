@@ -17,17 +17,19 @@ REMOTE_SYSTEMD_UNIT ?= /etc/systemd/system/$(BINARY).service
 REMOTE_ENV_FILE ?= /etc/default/$(BINARY)
 REMOTE_LOGROTATE ?= /etc/logrotate.d/$(BINARY)
 REMOTE_TMP_DIR ?= /tmp/$(BINARY)-deploy
+REMOTE_CONFIG_DIR ?= /etc/$(BINARY)
+REMOTE_BLOCKLIST_FILE ?= $(REMOTE_CONFIG_DIR)/blocklist.csv
 
 SSH_USER ?= root
 SSH_PORT ?= 22
-SERVER_IP ?=
-SERVER ?=
-TARGET_HOST := $(if $(SERVER_IP),$(SERVER_IP),$(SERVER))
+REMOTE_HOST ?= xip.preview.run
+TARGET_HOST := $(REMOTE_HOST)
 SSH_TARGET := $(SSH_USER)@$(TARGET_HOST)
+LOCAL_BLOCKLIST_FILE ?= config/blocklist.csv
 SSH := ssh -p $(SSH_PORT)
 SCP := scp -P $(SSH_PORT)
 
-.PHONY: build build-linux-amd64 test run deploy clean
+.PHONY: build build-linux-amd64 test run deploy deploy-check blocklist clean
 .PHONY: fmt check-fmt lint precommit-install precommit-run
 
 build:
@@ -60,7 +62,7 @@ run:
 	GOSUMDB=$(GOSUMDB) $(GO) run ./cmd/$(BINARY)
 
 deploy: build-linux-amd64
-	@test -n "$(TARGET_HOST)" || (echo "Set SERVER_IP=<server ip> (or SERVER=<server ip>)" && exit 1)
+	@test -n "$(TARGET_HOST)" || (echo "Set REMOTE_HOST=<host>" && exit 1)
 	@test -f "$(LOCAL_ENV_FILE)" || (echo "Missing $(LOCAL_ENV_FILE). Create it from config/.env.example first." && exit 1)
 	$(SSH) $(SSH_TARGET) "mkdir -p $(REMOTE_TMP_DIR)"
 	$(SCP) $(LINUX_AMD64_OUTPUT) $(SSH_TARGET):$(REMOTE_TMP_DIR)/$(BINARY)
@@ -71,6 +73,10 @@ deploy: build-linux-amd64
 		sudo install -m 0644 $(REMOTE_TMP_DIR)/$(BINARY).service $(REMOTE_SYSTEMD_UNIT) && \
 		sudo install -m 0644 $(REMOTE_TMP_DIR)/$(BINARY).logrotate $(REMOTE_LOGROTATE) && \
 		sudo install -m 0644 $(REMOTE_TMP_DIR)/$(BINARY).env $(REMOTE_ENV_FILE) && \
+		sudo install -d -m 0755 $(REMOTE_CONFIG_DIR) && \
+		sudo install -d -m 0755 $(REMOTE_CONFIG_DIR)/acme-cache && \
+		sudo touch $(REMOTE_BLOCKLIST_FILE) && \
+		sudo chmod 0644 $(REMOTE_BLOCKLIST_FILE) && \
 		sudo install -d -m 0755 /var/log/$(BINARY) && \
 		sudo touch /var/log/$(BINARY)/$(BINARY).log && \
 		sudo chmod 0640 /var/log/$(BINARY)/$(BINARY).log && \
@@ -78,6 +84,20 @@ deploy: build-linux-amd64
 		sudo systemctl enable --now $(BINARY).service && \
 		sudo systemctl restart $(BINARY).service && \
 		rm -rf $(REMOTE_TMP_DIR)"
+
+blocklist:
+	@test -f "$(LOCAL_BLOCKLIST_FILE)" || (echo "Missing $(LOCAL_BLOCKLIST_FILE)." && exit 1)
+	$(SSH) $(SSH_TARGET) "mkdir -p $(REMOTE_TMP_DIR)"
+	$(SCP) $(LOCAL_BLOCKLIST_FILE) $(SSH_TARGET):$(REMOTE_TMP_DIR)/blocklist.csv
+	$(SSH) $(SSH_TARGET) "sudo install -d -m 0755 $(REMOTE_CONFIG_DIR) && \
+		sudo install -m 0644 $(REMOTE_TMP_DIR)/blocklist.csv $(REMOTE_BLOCKLIST_FILE) && \
+		rm -rf $(REMOTE_TMP_DIR)"
+
+deploy-check:
+	@test -n "$(TARGET_HOST)" || (echo "Set REMOTE_HOST=<host>" && exit 1)
+	$(SSH) $(SSH_TARGET) "sudo systemctl is-active --quiet $(BINARY).service && echo '$(BINARY).service is active' && \
+		echo 'Last 100 log lines (/var/log/$(BINARY)/$(BINARY).log):' && \
+		sudo tail -n 100 /var/log/$(BINARY)/$(BINARY).log"
 
 clean:
 	rm -rf $(DIST_DIR)

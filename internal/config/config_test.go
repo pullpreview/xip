@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestLoadUsesEnvironmentDefaults(t *testing.T) {
@@ -14,7 +15,12 @@ func TestLoadUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("XIP_TTL", "600")
 	t.Setenv("XIP_LISTEN", ":8053")
 	t.Setenv("XIP_LISTEN_HTTP", ":8080")
+	t.Setenv("XIP_LISTEN_HTTPS", ":8443")
 	t.Setenv("XIP_ROOT_REDIRECT_URL", "https://pullpreview.com/?ref=xip")
+	t.Setenv("XIP_BLOCKLIST_PATH", "config/custom-blocklist.csv")
+	t.Setenv("XIP_BLOCKLIST_RELOAD_INTERVAL", "90s")
+	t.Setenv("XIP_ACME_CACHE_DIR", "/tmp/acme-cache")
+	t.Setenv("XIP_ACME_EMAIL", "ops@example.test")
 
 	cfg, err := Load(nil)
 	if err != nil {
@@ -36,8 +42,23 @@ func TestLoadUsesEnvironmentDefaults(t *testing.T) {
 	if cfg.ListenHTTP != ":8080" {
 		t.Fatalf("unexpected listen-http: %q", cfg.ListenHTTP)
 	}
+	if cfg.ListenHTTPS != ":8443" {
+		t.Fatalf("unexpected listen-https: %q", cfg.ListenHTTPS)
+	}
 	if cfg.RootRedirectURL != "https://pullpreview.com/?ref=xip" {
 		t.Fatalf("unexpected root redirect URL: %q", cfg.RootRedirectURL)
+	}
+	if cfg.BlocklistPath != "config/custom-blocklist.csv" {
+		t.Fatalf("unexpected blocklist path: %q", cfg.BlocklistPath)
+	}
+	if cfg.BlocklistReloadInterval != 90*time.Second {
+		t.Fatalf("unexpected blocklist reload interval: %s", cfg.BlocklistReloadInterval)
+	}
+	if cfg.ACMECacheDir != "/tmp/acme-cache" {
+		t.Fatalf("unexpected acme cache dir: %q", cfg.ACMECacheDir)
+	}
+	if cfg.ACMEEmail != "ops@example.test" {
+		t.Fatalf("unexpected acme email: %q", cfg.ACMEEmail)
 	}
 
 	expectedRoot := []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")}
@@ -60,7 +81,12 @@ func TestLoadFlagsOverrideEnvironment(t *testing.T) {
 	t.Setenv("XIP_LISTEN_UDP", ":2053")
 	t.Setenv("XIP_LISTEN_TCP", ":3053")
 	t.Setenv("XIP_LISTEN_HTTP", ":2080")
+	t.Setenv("XIP_LISTEN_HTTPS", ":2443")
 	t.Setenv("XIP_ROOT_REDIRECT_URL", "https://env.example")
+	t.Setenv("XIP_BLOCKLIST_PATH", "config/env-blocklist.csv")
+	t.Setenv("XIP_BLOCKLIST_RELOAD_INTERVAL", "120s")
+	t.Setenv("XIP_ACME_CACHE_DIR", "/tmp/env-cache")
+	t.Setenv("XIP_ACME_EMAIL", "env@example.test")
 
 	cfg, err := Load([]string{
 		"--domain", "flag.test",
@@ -71,7 +97,12 @@ func TestLoadFlagsOverrideEnvironment(t *testing.T) {
 		"--listen-udp", ":4053",
 		"--listen-tcp", ":5053",
 		"--listen-http", ":4080",
+		"--listen-https", ":4443",
 		"--root-redirect-url", "https://flag.example/?src=xip",
+		"--blocklist-path", "config/flag-blocklist.csv",
+		"--blocklist-reload-interval", "30s",
+		"--acme-cache-dir", "/tmp/flag-cache",
+		"--acme-email", "flag@example.test",
 	})
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -92,8 +123,23 @@ func TestLoadFlagsOverrideEnvironment(t *testing.T) {
 	if cfg.ListenHTTP != ":4080" {
 		t.Fatalf("expected listen-http override, got %q", cfg.ListenHTTP)
 	}
+	if cfg.ListenHTTPS != ":4443" {
+		t.Fatalf("expected listen-https override, got %q", cfg.ListenHTTPS)
+	}
 	if cfg.RootRedirectURL != "https://flag.example/?src=xip" {
 		t.Fatalf("expected root redirect URL override, got %q", cfg.RootRedirectURL)
+	}
+	if cfg.BlocklistPath != "config/flag-blocklist.csv" {
+		t.Fatalf("expected blocklist path override, got %q", cfg.BlocklistPath)
+	}
+	if cfg.BlocklistReloadInterval != 30*time.Second {
+		t.Fatalf("expected blocklist reload interval override, got %s", cfg.BlocklistReloadInterval)
+	}
+	if cfg.ACMECacheDir != "/tmp/flag-cache" {
+		t.Fatalf("expected acme cache dir override, got %q", cfg.ACMECacheDir)
+	}
+	if cfg.ACMEEmail != "flag@example.test" {
+		t.Fatalf("expected acme email override, got %q", cfg.ACMEEmail)
 	}
 
 	if got := cfg.RootAddresses[0].String(); got != "192.168.1.10" {
@@ -113,12 +159,45 @@ func TestLoadRejectsInvalidAddress(t *testing.T) {
 	}
 }
 
+func TestLoadUsesEtcDefaultsForConfigPaths(t *testing.T) {
+	t.Setenv("XIP_BLOCKLIST_PATH", "")
+	t.Setenv("XIP_ACME_CACHE_DIR", "")
+
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.BlocklistPath != "/etc/xip/blocklist.csv" {
+		t.Fatalf("expected default blocklist path, got %q", cfg.BlocklistPath)
+	}
+	if cfg.ACMECacheDir != "/etc/xip/acme-cache" {
+		t.Fatalf("expected default acme cache dir, got %q", cfg.ACMECacheDir)
+	}
+}
+
 func TestLoadRejectsInvalidRootRedirectURL(t *testing.T) {
 	t.Setenv("XIP_ROOT_REDIRECT_URL", "not-a-url")
 
 	_, err := Load(nil)
 	if err == nil {
 		t.Fatalf("expected error for invalid root redirect URL")
+	}
+}
+
+func TestLoadRejectsInvalidBlocklistReloadInterval(t *testing.T) {
+	t.Setenv("XIP_BLOCKLIST_RELOAD_INTERVAL", "not-a-duration")
+
+	_, err := Load(nil)
+	if err == nil {
+		t.Fatalf("expected error for invalid blocklist reload interval")
+	}
+}
+
+func TestLoadRejectsNonPositiveBlocklistReloadInterval(t *testing.T) {
+	_, err := Load([]string{"--blocklist-reload-interval", "0s"})
+	if err == nil {
+		t.Fatalf("expected error for non-positive blocklist reload interval")
 	}
 }
 
@@ -136,5 +215,12 @@ func TestLoadRejectsEmptyListenHTTPWithRedirect(t *testing.T) {
 	_, err := Load([]string{"--listen-http", "", "--root-redirect-url", "https://pullpreview.com/?ref=xip"})
 	if err == nil {
 		t.Fatalf("expected error for empty listen-http with redirect configured")
+	}
+}
+
+func TestLoadRejectsEmptyACMECacheDirWhenHTTPSEnabled(t *testing.T) {
+	_, err := Load([]string{"--acme-cache-dir", ""})
+	if err == nil {
+		t.Fatalf("expected error for empty acme cache dir when https is enabled")
 	}
 }

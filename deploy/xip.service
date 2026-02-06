@@ -6,6 +6,8 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=-/etc/default/xip
+Environment=XIP_BLOCKLIST_PATH=/etc/xip/blocklist.csv
+Environment=XIP_ACME_CACHE_DIR=/etc/xip/acme-cache
 LogsDirectory=xip
 StandardOutput=append:/var/log/xip/xip.log
 StandardError=append:/var/log/xip/xip.log

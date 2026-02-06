@@ -36,3 +36,38 @@ func TestConfiguredEndpointPrecedence(t *testing.T) {
 		t.Fatalf("expected %q source, got %q", metricsEndpointEnv, fromEnv)
 	}
 }
+
+func TestConfiguredLogsEndpointPrecedence(t *testing.T) {
+	t.Setenv(globalEndpointEnv, "global.example")
+	t.Setenv(logsEndpointEnv, "logs.example")
+
+	endpoint, fromEnv := configuredLogsEndpoint()
+	if endpoint != "logs.example" {
+		t.Fatalf("expected logs endpoint, got %q", endpoint)
+	}
+	if fromEnv != logsEndpointEnv {
+		t.Fatalf("expected %q source, got %q", logsEndpointEnv, fromEnv)
+	}
+}
+
+func TestNormalizeLogsEndpointURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty", input: "", expected: ""},
+		{name: "host only", input: "ingest.eu.signoz.cloud", expected: "https://ingest.eu.signoz.cloud/v1/logs"},
+		{name: "host with slash", input: "https://ingest.eu.signoz.cloud/", expected: "https://ingest.eu.signoz.cloud/v1/logs"},
+		{name: "host with custom path", input: "https://collector.example.com/otel", expected: "https://collector.example.com/otel/v1/logs"},
+		{name: "already logs path", input: "https://collector.example.com/v1/logs", expected: "https://collector.example.com/v1/logs"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeLogsEndpointURL(tc.input); got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}

@@ -11,21 +11,27 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var labelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // Config captures runtime settings for the xip DNS service.
 type Config struct {
-	Domain          string
-	RootAddresses   []netip.Addr
-	NSAddresses     []netip.Addr
-	Timestamp       uint32
-	TTL             uint32
-	ListenUDP       string
-	ListenTCP       string
-	ListenHTTP      string
-	RootRedirectURL string
+	Domain                  string
+	RootAddresses           []netip.Addr
+	NSAddresses             []netip.Addr
+	Timestamp               uint32
+	TTL                     uint32
+	ListenUDP               string
+	ListenTCP               string
+	ListenHTTP              string
+	ListenHTTPS             string
+	RootRedirectURL         string
+	BlocklistPath           string
+	BlocklistReloadInterval time.Duration
+	ACMECacheDir            string
+	ACMEEmail               string
 }
 
 // Load builds a Config from environment variables and CLI flags.
@@ -40,7 +46,11 @@ func Load(args []string) (Config, error) {
 	listenUDPDefault := getenv("XIP_LISTEN_UDP", listenDefault)
 	listenTCPDefault := getenv("XIP_LISTEN_TCP", listenDefault)
 	listenHTTPDefault := getenv("XIP_LISTEN_HTTP", ":80")
+	listenHTTPSDefault := getenv("XIP_LISTEN_HTTPS", ":443")
 	rootRedirectDefault := strings.TrimSpace(getenv("XIP_ROOT_REDIRECT_URL", ""))
+	blocklistPathDefault := getenv("XIP_BLOCKLIST_PATH", "/etc/xip/blocklist.csv")
+	acmeCacheDirDefault := getenv("XIP_ACME_CACHE_DIR", "/etc/xip/acme-cache")
+	acmeEmailDefault := strings.TrimSpace(getenv("XIP_ACME_EMAIL", ""))
 
 	timestampDefault, err := getenvUint32("XIP_TIMESTAMP", 0)
 	if err != nil {
@@ -48,6 +58,11 @@ func Load(args []string) (Config, error) {
 	}
 
 	ttlDefault, err := getenvUint32("XIP_TTL", 300)
+	if err != nil {
+		return Config{}, err
+	}
+
+	blocklistReloadDefault, err := getenvDuration("XIP_BLOCKLIST_RELOAD_INTERVAL", 60*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -66,7 +81,12 @@ func Load(args []string) (Config, error) {
 	fs.StringVar(&cfg.ListenUDP, "listen-udp", listenUDPDefault, "UDP listen address")
 	fs.StringVar(&cfg.ListenTCP, "listen-tcp", listenTCPDefault, "TCP listen address")
 	fs.StringVar(&cfg.ListenHTTP, "listen-http", listenHTTPDefault, "HTTP listen address used for root redirect service")
+	fs.StringVar(&cfg.ListenHTTPS, "listen-https", listenHTTPSDefault, "HTTPS listen address used for block page service")
 	fs.StringVar(&cfg.RootRedirectURL, "root-redirect-url", rootRedirectDefault, "HTTP redirect target URL for root traffic")
+	fs.StringVar(&cfg.BlocklistPath, "blocklist-path", blocklistPathDefault, "path to CSV blocklist file with fqdn,reason rows")
+	fs.DurationVar(&cfg.BlocklistReloadInterval, "blocklist-reload-interval", blocklistReloadDefault, "reload interval for the CSV blocklist")
+	fs.StringVar(&cfg.ACMECacheDir, "acme-cache-dir", acmeCacheDirDefault, "directory for Let's Encrypt certificate cache")
+	fs.StringVar(&cfg.ACMEEmail, "acme-email", acmeEmailDefault, "email used for Let's Encrypt registration")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -106,6 +126,12 @@ func Load(args []string) (Config, error) {
 	if strings.TrimSpace(cfg.ListenTCP) == "" {
 		return Config{}, errors.New("listen-tcp cannot be empty")
 	}
+	if cfg.BlocklistReloadInterval <= 0 {
+		return Config{}, errors.New("blocklist-reload-interval must be greater than 0")
+	}
+	if strings.TrimSpace(cfg.ListenHTTPS) != "" && strings.TrimSpace(cfg.ACMECacheDir) == "" {
+		return Config{}, errors.New("acme-cache-dir cannot be empty when listen-https is configured")
+	}
 	if strings.TrimSpace(cfg.RootRedirectURL) != "" {
 		if strings.TrimSpace(cfg.ListenHTTP) == "" {
 			return Config{}, errors.New("listen-http cannot be empty when root redirect is configured")
@@ -142,6 +168,20 @@ func getenvUint32(key string, fallback uint32) (uint32, error) {
 	}
 
 	return uint32(parsed), nil
+}
+
+func getenvDuration(key string, fallback time.Duration) (time.Duration, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+
+	parsed, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
+	}
+
+	return parsed, nil
 }
 
 func parseIPv4List(raw string) ([]netip.Addr, error) {

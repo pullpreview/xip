@@ -15,12 +15,31 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{}))
+	textHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{})
+	logger := slog.New(textHandler)
 
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "xip: %v\n", err)
 		os.Exit(2)
+	}
+
+	logHandler, shutdownLogs, err := metrics.NewOTELLogHandler(context.Background(), logger)
+	if err != nil {
+		logger.Error("failed to initialize otel logs", "error", err)
+		os.Exit(1)
+	}
+	if logHandler != nil {
+		logger = slog.New(metrics.NewMultiHandler(textHandler, logHandler))
+	}
+	if shutdownLogs != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownLogs(ctx); err != nil {
+				logger.Error("failed to flush otel logs", "error", err)
+			}
+		}()
 	}
 
 	metricsRecorder, shutdownMetrics, err := metrics.NewDNSRequestRecorder(context.Background(), logger)
@@ -47,8 +66,12 @@ func main() {
 		"domain", cfg.Domain,
 		"listen_udp", cfg.ListenUDP,
 		"listen_tcp", cfg.ListenTCP,
+		"listen_http", cfg.ListenHTTP,
+		"listen_https", cfg.ListenHTTPS,
 		"root_addresses", cfg.RootAddresses,
 		"ns_addresses", cfg.NSAddresses,
+		"blocklist_path", cfg.BlocklistPath,
+		"blocklist_reload_interval", cfg.BlocklistReloadInterval,
 	)
 
 	if err := server.Start(ctx); err != nil {

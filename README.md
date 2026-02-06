@@ -118,6 +118,7 @@ Metric attributes:
 
 - `fqdn`: queried fully-qualified domain name (normalized)
 - `domain`: fqdn with the dashed-IP token removed (for example `ip-1-2-3-4.preview.run` -> `preview.run`)
+- `tld`: registrable domain (`eTLD+1`) derived from `domain` using the public suffix list (for example `preview.hello.co.uk` -> `hello.co.uk`)
 
 Use standard OTEL env vars, for example:
 

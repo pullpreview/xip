@@ -25,7 +25,7 @@ type DNSRequestRecorder struct {
 }
 
 // RecordDNSRequest increments the DNS request counter with request attributes.
-func (r *DNSRequestRecorder) RecordDNSRequest(ctx context.Context, fqdn string, domain string) {
+func (r *DNSRequestRecorder) RecordDNSRequest(ctx context.Context, fqdn string, domain string, tld string) {
 	if r == nil || r.counter == nil {
 		return
 	}
@@ -34,6 +34,7 @@ func (r *DNSRequestRecorder) RecordDNSRequest(ctx context.Context, fqdn string, 
 		metric.WithAttributes(
 			attribute.String("fqdn", fqdn),
 			attribute.String("domain", domain),
+			attribute.String("tld", tld),
 		),
 	)
 }

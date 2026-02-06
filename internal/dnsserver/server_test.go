@@ -1,6 +1,7 @@
 package dnsserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -212,6 +213,44 @@ func TestMetricDomainForFQDN(t *testing.T) {
 	}
 }
 
+func TestRegistrableDomainForFQDN(t *testing.T) {
+	tests := []struct {
+		name     string
+		fqdn     string
+		expected string
+	}{
+		{
+			name:     "deliverymatch eu",
+			fqdn:     "pr-6134-132-ip-18-157-157-168.preview.deliverymatch.eu",
+			expected: "deliverymatch.eu",
+		},
+		{
+			name:     "hello co uk",
+			fqdn:     "pr-6134-132-ip-18-157-157-168.preview.hello.co.uk",
+			expected: "hello.co.uk",
+		},
+		{
+			name:     "single label has no registrable domain",
+			fqdn:     "localhost",
+			expected: "",
+		},
+		{
+			name:     "empty",
+			fqdn:     "",
+			expected: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := registrableDomainForFQDN(tc.fqdn)
+			if got != tc.expected {
+				t.Fatalf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}
+
 func TestResolveNSRecords(t *testing.T) {
 	srv := newTestServer()
 
@@ -367,8 +406,29 @@ func TestHandleDNSRecordsMetricsEveryRequest(t *testing.T) {
 	if calls[0].domain != "preview.run" {
 		t.Fatalf("unexpected first domain: %q", calls[0].domain)
 	}
-	if calls[1].fqdn != "" || calls[1].domain != "" {
-		t.Fatalf("unexpected second call payload: fqdn=%q domain=%q", calls[1].fqdn, calls[1].domain)
+	if calls[0].tld != "preview.run" {
+		t.Fatalf("unexpected first tld: %q", calls[0].tld)
+	}
+	if calls[1].fqdn != "" || calls[1].domain != "" || calls[1].tld != "" {
+		t.Fatalf("unexpected second call payload: fqdn=%q domain=%q tld=%q", calls[1].fqdn, calls[1].domain, calls[1].tld)
+	}
+}
+
+func TestHandleDNSLogsTLDAttribute(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	srv := New(testConfig(), logger, nil)
+
+	req := new(dns.Msg)
+	req.SetQuestion("pr-6134-132-ip-18-157-157-168.preview.hello.co.uk.", dns.TypeA)
+	srv.handleDNS(&recordingWriter{}, req)
+
+	output := logs.String()
+	if !strings.Contains(output, "msg=\"dns query\"") {
+		t.Fatalf("expected dns query log, got %q", output)
+	}
+	if !strings.Contains(output, "tld=hello.co.uk") {
+		t.Fatalf("expected tld attribute in log output, got %q", output)
 	}
 }
 
@@ -631,6 +691,7 @@ type recordingWriter struct {
 type metricCall struct {
 	fqdn   string
 	domain string
+	tld    string
 }
 
 type recordingMetrics struct {
@@ -638,10 +699,10 @@ type recordingMetrics struct {
 	items []metricCall
 }
 
-func (r *recordingMetrics) RecordDNSRequest(_ context.Context, fqdn string, domain string) {
+func (r *recordingMetrics) RecordDNSRequest(_ context.Context, fqdn string, domain string, tld string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.items = append(r.items, metricCall{fqdn: fqdn, domain: domain})
+	r.items = append(r.items, metricCall{fqdn: fqdn, domain: domain, tld: tld})
 }
 
 func (r *recordingMetrics) calls() []metricCall {

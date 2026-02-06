@@ -18,6 +18,7 @@ import (
 
 	"github.com/miekg/dns"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/pullpreview/docker-sslip/internal/blocklist"
 	"github.com/pullpreview/docker-sslip/internal/config"
@@ -29,12 +30,12 @@ const supportEmail = "support@pullpreview.com"
 
 // RequestMetrics records per-request metrics for DNS traffic.
 type RequestMetrics interface {
-	RecordDNSRequest(ctx context.Context, fqdn string, domain string)
+	RecordDNSRequest(ctx context.Context, fqdn string, domain string, tld string)
 }
 
 type noopRequestMetrics struct{}
 
-func (noopRequestMetrics) RecordDNSRequest(context.Context, string, string) {}
+func (noopRequestMetrics) RecordDNSRequest(context.Context, string, string, string) {}
 
 // Server hosts the DNS service for the xip zone.
 type Server struct {
@@ -199,7 +200,9 @@ func (s *Server) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if len(req.Question) > 0 {
 		fqdn = normalizeName(req.Question[0].Name)
 	}
-	s.metrics.RecordDNSRequest(context.Background(), fqdn, metricDomainForFQDN(fqdn))
+	domain := metricDomainForFQDN(fqdn)
+	tld := registrableDomainForFQDN(domain)
+	s.metrics.RecordDNSRequest(context.Background(), fqdn, domain, tld)
 
 	resp := new(dns.Msg)
 	resp.SetReply(req)
@@ -226,6 +229,7 @@ func (s *Server) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		"class", question.Qclass,
 		"rcode", dns.RcodeToString[rcode],
 		"answers", len(answer),
+		"tld", tld,
 	)
 
 	if err := w.WriteMsg(resp); err != nil {
@@ -385,6 +389,19 @@ func metricDomainForFQDN(rawFQDN string) string {
 	}
 
 	return fqdn
+}
+
+func registrableDomainForFQDN(rawFQDN string) string {
+	fqdn := normalizeName(rawFQDN)
+	if fqdn == "" {
+		return ""
+	}
+
+	registrable, err := publicsuffix.EffectiveTLDPlusOne(fqdn)
+	if err != nil {
+		return ""
+	}
+	return registrable
 }
 
 func cleanupMetricDomain(value string) string {

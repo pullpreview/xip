@@ -1,0 +1,11 @@
+/var/log/xip/*.log {
+  daily
+  rotate 14
+  size 100M
+  missingok
+  notifempty
+  compress
+  delaycompress
+  copytruncate
+  create 0640 root adm
+}

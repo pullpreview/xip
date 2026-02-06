@@ -51,12 +51,14 @@ func TestResolveRootA(t *testing.T) {
 	}
 }
 
-func TestResolveDashedIPPrefixAndSuffix(t *testing.T) {
+func TestResolveDashedIPUseCases(t *testing.T) {
 	srv := newTestServer()
 
 	cases := []string{
-		"1-2-3-5-preview.example.test.",
-		"preview-1-2-3-5.example.test.",
+		"1-2-3-4-whatever.example.test.",
+		"whatever-1-2-3-4.example.test.",
+		"subdomain.1-2-3-4-whatever.example.test.",
+		"subdomain.whatever-1-2-3-4.example.test.",
 	}
 
 	for _, name := range cases {
@@ -71,8 +73,8 @@ func TestResolveDashedIPPrefixAndSuffix(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: expected A record, got %T", name, answer[0])
 		}
-		if got := aRecord.A.String(); got != "1.2.3.5" {
-			t.Fatalf("%s: expected 1.2.3.5, got %s", name, got)
+		if got := aRecord.A.String(); got != "1.2.3.4" {
+			t.Fatalf("%s: expected 1.2.3.4, got %s", name, got)
 		}
 	}
 }

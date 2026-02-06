@@ -9,11 +9,13 @@ BUILD_OUTPUT := $(DIST_DIR)/$(BINARY)
 LINUX_AMD64_OUTPUT := $(DIST_DIR)/$(BINARY)-linux-amd64
 
 SYSTEMD_UNIT_LOCAL := deploy/$(BINARY).service
+LOGROTATE_LOCAL := deploy/$(BINARY).logrotate
 LOCAL_ENV_FILE := config/.env
 
 REMOTE_BIN ?= /usr/local/bin/$(BINARY)
 REMOTE_SYSTEMD_UNIT ?= /etc/systemd/system/$(BINARY).service
 REMOTE_ENV_FILE ?= /etc/default/$(BINARY)
+REMOTE_LOGROTATE ?= /etc/logrotate.d/$(BINARY)
 REMOTE_TMP_DIR ?= /tmp/$(BINARY)-deploy
 
 SSH_USER ?= root
@@ -63,10 +65,15 @@ deploy: build-linux-amd64
 	$(SSH) $(SSH_TARGET) "mkdir -p $(REMOTE_TMP_DIR)"
 	$(SCP) $(LINUX_AMD64_OUTPUT) $(SSH_TARGET):$(REMOTE_TMP_DIR)/$(BINARY)
 	$(SCP) $(SYSTEMD_UNIT_LOCAL) $(SSH_TARGET):$(REMOTE_TMP_DIR)/$(BINARY).service
+	$(SCP) $(LOGROTATE_LOCAL) $(SSH_TARGET):$(REMOTE_TMP_DIR)/$(BINARY).logrotate
 	$(SCP) $(LOCAL_ENV_FILE) $(SSH_TARGET):$(REMOTE_TMP_DIR)/$(BINARY).env
 	$(SSH) $(SSH_TARGET) "sudo install -m 0755 $(REMOTE_TMP_DIR)/$(BINARY) $(REMOTE_BIN) && \
 		sudo install -m 0644 $(REMOTE_TMP_DIR)/$(BINARY).service $(REMOTE_SYSTEMD_UNIT) && \
+		sudo install -m 0644 $(REMOTE_TMP_DIR)/$(BINARY).logrotate $(REMOTE_LOGROTATE) && \
 		sudo install -m 0644 $(REMOTE_TMP_DIR)/$(BINARY).env $(REMOTE_ENV_FILE) && \
+		sudo install -d -m 0755 /var/log/$(BINARY) && \
+		sudo touch /var/log/$(BINARY)/$(BINARY).log && \
+		sudo chmod 0640 /var/log/$(BINARY)/$(BINARY).log && \
 		sudo systemctl daemon-reload && \
 		sudo systemctl enable --now $(BINARY).service && \
 		sudo systemctl restart $(BINARY).service && \

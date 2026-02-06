@@ -105,10 +105,12 @@ make deploy SERVER_IP=203.0.113.10
 
 - Builds `xip` for `linux/amd64`
 - SSHes to the target host
-- Uploads binary + systemd unit + `config/.env`
+- Uploads binary + systemd unit + logrotate policy + `config/.env`
 - Installs binary to `/usr/local/bin/xip`
 - Installs service to `/etc/systemd/system/xip.service`
+- Installs logrotate config to `/etc/logrotate.d/xip`
 - Syncs env file to `/etc/default/xip`
+- Ensures `/var/log/xip/xip.log` exists
 - Reloads systemd and restarts `xip.service`
 
 Optional deploy overrides:

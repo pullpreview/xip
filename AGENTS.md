@@ -54,4 +54,5 @@ make precommit-run
 It syncs:
 - binary to `/usr/local/bin/xip`
 - systemd unit to `/etc/systemd/system/xip.service`
+- logrotate policy to `/etc/logrotate.d/xip`
 - env file to `/etc/default/xip`

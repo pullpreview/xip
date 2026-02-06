@@ -11,8 +11,8 @@ func TestNormalizeEndpointURL(t *testing.T) {
 		{name: "empty", input: "", expected: ""},
 		{name: "already http", input: "http://ingest.eu.signoz.cloud", expected: "http://ingest.eu.signoz.cloud"},
 		{name: "already https", input: "https://ingest.eu.signoz.cloud", expected: "https://ingest.eu.signoz.cloud"},
-		{name: "host only defaults to http", input: "ingest.eu.signoz.cloud", expected: "http://ingest.eu.signoz.cloud"},
-		{name: "host with port defaults to http", input: "ingest.eu.signoz.cloud:4318", expected: "http://ingest.eu.signoz.cloud:4318"},
+		{name: "host only defaults to https", input: "ingest.eu.signoz.cloud", expected: "https://ingest.eu.signoz.cloud"},
+		{name: "host with port defaults to https", input: "ingest.eu.signoz.cloud:4318", expected: "https://ingest.eu.signoz.cloud:4318"},
 	}
 
 	for _, tc := range tests {

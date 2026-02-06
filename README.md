@@ -81,7 +81,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=ingest.eu.signoz.cloud
 OTEL_EXPORTER_OTLP_HEADERS=signoz-ingestion-key=<your-ingestion-key>
 ```
 
-If `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` omits a scheme, `xip` defaults it to `http://`.
+If `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` omits a scheme, `xip` defaults it to `https://`.
 
 ### Local run example
 

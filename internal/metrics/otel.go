@@ -94,6 +94,6 @@ func normalizeEndpointURL(raw string) string {
 		return trimmed
 	}
 
-	// If scheme is omitted, default to HTTP as requested.
-	return "http://" + trimmed
+	// If scheme is omitted, default to HTTPS.
+	return "https://" + trimmed
 }

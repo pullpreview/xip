@@ -1,0 +1,14 @@
+[Unit]
+Description=xip DNS service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/xip
+ExecStart=/usr/local/bin/xip
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,35 @@
+minimum_pre_commit_version: "3.6.0"
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-yaml
+      - id: check-toml
+
+  - repo: local
+    hooks:
+      - id: gofmt-check
+        name: gofmt (check)
+        entry: >-
+          bash -c 'files="$(git ls-files '\''*.go'\'')"; [ -z "$files" ] && exit 0; out="$(mise x -- gofmt -l $files)"; [ -z "$out" ] && exit 0; echo "Unformatted Go files:"; echo "$out"; echo "Run: make fmt"; exit 1'
+        language: system
+        pass_filenames: false
+
+      - id: go-vet
+        name: go vet
+        entry: bash -c 'GOSUMDB=${GOSUMDB:-sum.golang.org} mise x -- go vet ./...'
+        language: system
+        pass_filenames: false
+
+      - id: go-test
+        name: make test
+        entry: make test
+        language: system
+        pass_filenames: false

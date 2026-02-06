@@ -1,0 +1,189 @@
+package config
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"math"
+	"net/netip"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+var labelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// Config captures runtime settings for the xip DNS service.
+type Config struct {
+	Domain        string
+	RootAddresses []netip.Addr
+	NSAddresses   []netip.Addr
+	Timestamp     uint32
+	TTL           uint32
+	ListenUDP     string
+	ListenTCP     string
+}
+
+// Load builds a Config from environment variables and CLI flags.
+// CLI flags take precedence over environment variables.
+func Load(args []string) (Config, error) {
+	cfg := Config{}
+
+	domainDefault := getenv("XIP_DOMAIN", "xip.test")
+	rootDefault := getenv("XIP_ROOT_ADDRESSES", "127.0.0.1")
+	nsDefault := getenv("XIP_NS_ADDRESSES", "127.0.0.1")
+	listenDefault := getenv("XIP_LISTEN", ":53")
+	listenUDPDefault := getenv("XIP_LISTEN_UDP", listenDefault)
+	listenTCPDefault := getenv("XIP_LISTEN_TCP", listenDefault)
+
+	timestampDefault, err := getenvUint32("XIP_TIMESTAMP", 0)
+	if err != nil {
+		return Config{}, err
+	}
+
+	ttlDefault, err := getenvUint32("XIP_TTL", 300)
+	if err != nil {
+		return Config{}, err
+	}
+
+	var rootAddressesRaw string
+	var nsAddressesRaw string
+	var timestampRaw uint64
+	var ttlRaw uint64
+
+	fs := flag.NewFlagSet("xip", flag.ContinueOnError)
+	fs.StringVar(&cfg.Domain, "domain", domainDefault, "root domain for the xip DNS zone")
+	fs.StringVar(&rootAddressesRaw, "root-addresses", rootDefault, "comma or space separated IPv4 addresses returned for the root domain")
+	fs.StringVar(&nsAddressesRaw, "ns-addresses", nsDefault, "comma or space separated IPv4 addresses for nameservers")
+	fs.Uint64Var(&timestampRaw, "timestamp", uint64(timestampDefault), "SOA serial number")
+	fs.Uint64Var(&ttlRaw, "ttl", uint64(ttlDefault), "TTL for all records")
+	fs.StringVar(&cfg.ListenUDP, "listen-udp", listenUDPDefault, "UDP listen address")
+	fs.StringVar(&cfg.ListenTCP, "listen-tcp", listenTCPDefault, "TCP listen address")
+
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+
+	normalizedDomain, err := normalizeDomain(cfg.Domain)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Domain = normalizedDomain
+
+	if timestampRaw > math.MaxUint32 {
+		return Config{}, errors.New("timestamp must be <= 4294967295")
+	}
+	cfg.Timestamp = uint32(timestampRaw)
+
+	if ttlRaw > math.MaxUint32 {
+		return Config{}, errors.New("ttl must be <= 4294967295")
+	}
+	cfg.TTL = uint32(ttlRaw)
+
+	rootAddresses, err := parseIPv4List(rootAddressesRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid root addresses: %w", err)
+	}
+	cfg.RootAddresses = rootAddresses
+
+	nsAddresses, err := parseIPv4List(nsAddressesRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid NS addresses: %w", err)
+	}
+	cfg.NSAddresses = nsAddresses
+
+	if strings.TrimSpace(cfg.ListenUDP) == "" {
+		return Config{}, errors.New("listen-udp cannot be empty")
+	}
+	if strings.TrimSpace(cfg.ListenTCP) == "" {
+		return Config{}, errors.New("listen-tcp cannot be empty")
+	}
+
+	return cfg, nil
+}
+
+func getenv(key, fallback string) string {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
+}
+
+func getenvUint32(key string, fallback uint32) (uint32, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
+	}
+
+	return uint32(parsed), nil
+}
+
+func parseIPv4List(raw string) ([]netip.Addr, error) {
+	parts := splitList(raw)
+	if len(parts) == 0 {
+		return nil, errors.New("at least one IPv4 address is required")
+	}
+
+	addresses := make([]netip.Addr, 0, len(parts))
+	for _, part := range parts {
+		addr, err := netip.ParseAddr(part)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", part, err)
+		}
+		if !addr.Is4() {
+			return nil, fmt.Errorf("%q is not an IPv4 address", part)
+		}
+		addresses = append(addresses, addr)
+	}
+
+	return addresses, nil
+}
+
+func splitList(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', ';', ' ', '\t', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func normalizeDomain(raw string) (string, error) {
+	domain := strings.ToLower(strings.TrimSpace(raw))
+	domain = strings.TrimSuffix(domain, ".")
+
+	if domain == "" {
+		return "", errors.New("domain cannot be empty")
+	}
+	if len(domain) > 253 {
+		return "", errors.New("domain exceeds 253 characters")
+	}
+
+	labels := strings.Split(domain, ".")
+	for _, label := range labels {
+		if len(label) == 0 {
+			return "", errors.New("domain contains empty label")
+		}
+		if len(label) > 63 {
+			return "", fmt.Errorf("label %q exceeds 63 characters", label)
+		}
+		if !labelPattern.MatchString(label) {
+			return "", fmt.Errorf("invalid label %q", label)
+		}
+	}
+
+	return domain, nil
+}

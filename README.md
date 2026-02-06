@@ -62,8 +62,22 @@ make precommit-run
 | `--ttl` | `XIP_TTL` | `300` |
 | `--listen-udp` | `XIP_LISTEN_UDP` (or `XIP_LISTEN`) | `:53` |
 | `--listen-tcp` | `XIP_LISTEN_TCP` (or `XIP_LISTEN`) | `:53` |
+| `--listen-http` | `XIP_LISTEN_HTTP` | `:80` |
+| `--root-redirect-url` | `XIP_ROOT_REDIRECT_URL` | empty (disabled) |
 
 Address lists accept comma or whitespace separators.
+
+## HTTP Redirect
+
+When `XIP_ROOT_REDIRECT_URL` (or `--root-redirect-url`) is set, `xip` also starts an HTTP server (default `:80`) and redirects all HTTP requests to that URL.
+
+Example:
+
+```console
+XIP_ROOT_REDIRECT_URL=https://pullpreview.com/?ref=xip
+```
+
+HTTP server startup is disabled when no redirect URL is configured.
 
 ## OTEL Metrics
 

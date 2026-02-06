@@ -13,6 +13,8 @@ func TestLoadUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("XIP_TIMESTAMP", "42")
 	t.Setenv("XIP_TTL", "600")
 	t.Setenv("XIP_LISTEN", ":8053")
+	t.Setenv("XIP_LISTEN_HTTP", ":8080")
+	t.Setenv("XIP_ROOT_REDIRECT_URL", "https://pullpreview.com/?ref=xip")
 
 	cfg, err := Load(nil)
 	if err != nil {
@@ -30,6 +32,12 @@ func TestLoadUsesEnvironmentDefaults(t *testing.T) {
 	}
 	if cfg.ListenUDP != ":8053" || cfg.ListenTCP != ":8053" {
 		t.Fatalf("expected listen addresses to use XIP_LISTEN, got udp=%q tcp=%q", cfg.ListenUDP, cfg.ListenTCP)
+	}
+	if cfg.ListenHTTP != ":8080" {
+		t.Fatalf("unexpected listen-http: %q", cfg.ListenHTTP)
+	}
+	if cfg.RootRedirectURL != "https://pullpreview.com/?ref=xip" {
+		t.Fatalf("unexpected root redirect URL: %q", cfg.RootRedirectURL)
 	}
 
 	expectedRoot := []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")}
@@ -51,6 +59,8 @@ func TestLoadFlagsOverrideEnvironment(t *testing.T) {
 	t.Setenv("XIP_TTL", "100")
 	t.Setenv("XIP_LISTEN_UDP", ":2053")
 	t.Setenv("XIP_LISTEN_TCP", ":3053")
+	t.Setenv("XIP_LISTEN_HTTP", ":2080")
+	t.Setenv("XIP_ROOT_REDIRECT_URL", "https://env.example")
 
 	cfg, err := Load([]string{
 		"--domain", "flag.test",
@@ -60,6 +70,8 @@ func TestLoadFlagsOverrideEnvironment(t *testing.T) {
 		"--ttl", "1200",
 		"--listen-udp", ":4053",
 		"--listen-tcp", ":5053",
+		"--listen-http", ":4080",
+		"--root-redirect-url", "https://flag.example/?src=xip",
 	})
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -77,6 +89,12 @@ func TestLoadFlagsOverrideEnvironment(t *testing.T) {
 	if cfg.ListenUDP != ":4053" || cfg.ListenTCP != ":5053" {
 		t.Fatalf("expected listen overrides, got udp=%q tcp=%q", cfg.ListenUDP, cfg.ListenTCP)
 	}
+	if cfg.ListenHTTP != ":4080" {
+		t.Fatalf("expected listen-http override, got %q", cfg.ListenHTTP)
+	}
+	if cfg.RootRedirectURL != "https://flag.example/?src=xip" {
+		t.Fatalf("expected root redirect URL override, got %q", cfg.RootRedirectURL)
+	}
 
 	if got := cfg.RootAddresses[0].String(); got != "192.168.1.10" {
 		t.Fatalf("unexpected root address: %s", got)
@@ -92,5 +110,31 @@ func TestLoadRejectsInvalidAddress(t *testing.T) {
 	_, err := Load(nil)
 	if err == nil {
 		t.Fatalf("expected error for invalid address")
+	}
+}
+
+func TestLoadRejectsInvalidRootRedirectURL(t *testing.T) {
+	t.Setenv("XIP_ROOT_REDIRECT_URL", "not-a-url")
+
+	_, err := Load(nil)
+	if err == nil {
+		t.Fatalf("expected error for invalid root redirect URL")
+	}
+}
+
+func TestLoadAllowsEmptyListenHTTPWithoutRedirect(t *testing.T) {
+	cfg, err := Load([]string{"--listen-http", ""})
+	if err != nil {
+		t.Fatalf("did not expect error when redirect is disabled: %v", err)
+	}
+	if cfg.RootRedirectURL != "" {
+		t.Fatalf("expected empty redirect url, got %q", cfg.RootRedirectURL)
+	}
+}
+
+func TestLoadRejectsEmptyListenHTTPWithRedirect(t *testing.T) {
+	_, err := Load([]string{"--listen-http", "", "--root-redirect-url", "https://pullpreview.com/?ref=xip"})
+	if err == nil {
+		t.Fatalf("expected error for empty listen-http with redirect configured")
 	}
 }

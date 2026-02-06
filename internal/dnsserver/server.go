@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 
@@ -35,6 +37,8 @@ type Server struct {
 	metrics RequestMetrics
 	udp     *dns.Server
 	tcp     *dns.Server
+	httpSrv *http.Server
+	httpLn  net.Listener
 	hdlr    dns.Handler
 }
 
@@ -69,7 +73,7 @@ func (s *Server) Start(ctx context.Context) error {
 		Handler: s.hdlr,
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 
 	go func() {
 		if err := s.udp.ListenAndServe(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -82,6 +86,26 @@ func (s *Server) Start(ctx context.Context) error {
 			errCh <- fmt.Errorf("tcp listener failed: %w", err)
 		}
 	}()
+
+	if strings.TrimSpace(s.cfg.RootRedirectURL) != "" {
+		httpLn, err := net.Listen("tcp", s.cfg.ListenHTTP)
+		if err != nil {
+			s.shutdown()
+			return fmt.Errorf("http listener failed: %w", err)
+		}
+
+		s.httpLn = httpLn
+		s.httpSrv = &http.Server{
+			Handler:           http.HandlerFunc(s.handleHTTP),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+
+		go func() {
+			if err := s.httpSrv.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("http listener failed: %w", err)
+			}
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -99,6 +123,12 @@ func (s *Server) shutdown() {
 	}
 	if s.tcp != nil {
 		_ = s.tcp.Shutdown()
+	}
+	if s.httpSrv != nil {
+		_ = s.httpSrv.Close()
+	}
+	if s.httpLn != nil {
+		_ = s.httpLn.Close()
 	}
 }
 
@@ -139,6 +169,15 @@ func (s *Server) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if err := w.WriteMsg(resp); err != nil {
 		s.log.Error("failed to write DNS response", "error", err)
 	}
+}
+
+func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(s.cfg.RootRedirectURL) == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	http.Redirect(w, r, s.cfg.RootRedirectURL, http.StatusFound)
 }
 
 func (s *Server) resolve(question dns.Question) (int, []dns.RR, []dns.RR) {

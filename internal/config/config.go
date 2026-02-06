@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -16,13 +17,15 @@ var labelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // Config captures runtime settings for the xip DNS service.
 type Config struct {
-	Domain        string
-	RootAddresses []netip.Addr
-	NSAddresses   []netip.Addr
-	Timestamp     uint32
-	TTL           uint32
-	ListenUDP     string
-	ListenTCP     string
+	Domain          string
+	RootAddresses   []netip.Addr
+	NSAddresses     []netip.Addr
+	Timestamp       uint32
+	TTL             uint32
+	ListenUDP       string
+	ListenTCP       string
+	ListenHTTP      string
+	RootRedirectURL string
 }
 
 // Load builds a Config from environment variables and CLI flags.
@@ -36,6 +39,8 @@ func Load(args []string) (Config, error) {
 	listenDefault := getenv("XIP_LISTEN", ":53")
 	listenUDPDefault := getenv("XIP_LISTEN_UDP", listenDefault)
 	listenTCPDefault := getenv("XIP_LISTEN_TCP", listenDefault)
+	listenHTTPDefault := getenv("XIP_LISTEN_HTTP", ":80")
+	rootRedirectDefault := strings.TrimSpace(getenv("XIP_ROOT_REDIRECT_URL", ""))
 
 	timestampDefault, err := getenvUint32("XIP_TIMESTAMP", 0)
 	if err != nil {
@@ -60,6 +65,8 @@ func Load(args []string) (Config, error) {
 	fs.Uint64Var(&ttlRaw, "ttl", uint64(ttlDefault), "TTL for all records")
 	fs.StringVar(&cfg.ListenUDP, "listen-udp", listenUDPDefault, "UDP listen address")
 	fs.StringVar(&cfg.ListenTCP, "listen-tcp", listenTCPDefault, "TCP listen address")
+	fs.StringVar(&cfg.ListenHTTP, "listen-http", listenHTTPDefault, "HTTP listen address used for root redirect service")
+	fs.StringVar(&cfg.RootRedirectURL, "root-redirect-url", rootRedirectDefault, "HTTP redirect target URL for root traffic")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -98,6 +105,14 @@ func Load(args []string) (Config, error) {
 	}
 	if strings.TrimSpace(cfg.ListenTCP) == "" {
 		return Config{}, errors.New("listen-tcp cannot be empty")
+	}
+	if strings.TrimSpace(cfg.RootRedirectURL) != "" {
+		if strings.TrimSpace(cfg.ListenHTTP) == "" {
+			return Config{}, errors.New("listen-http cannot be empty when root redirect is configured")
+		}
+		if err := validateAbsoluteURL(cfg.RootRedirectURL); err != nil {
+			return Config{}, fmt.Errorf("invalid root redirect URL: %w", err)
+		}
 	}
 
 	return cfg, nil
@@ -186,4 +201,18 @@ func normalizeDomain(raw string) (string, error) {
 	}
 
 	return domain, nil
+}
+
+func validateAbsoluteURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if !parsed.IsAbs() {
+		return errors.New("must be absolute and include scheme")
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return errors.New("must include host")
+	}
+	return nil
 }

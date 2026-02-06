@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"sync"
 	"testing"
@@ -323,9 +324,63 @@ func TestStartServesUDPAndTCP(t *testing.T) {
 	}()
 
 	udpAddr, tcpAddr := waitForListeners(t, srv, errCh)
+	if srv.httpLn != nil {
+		t.Fatalf("expected HTTP listener to be disabled when no redirect URL is configured")
+	}
 
 	assertQueryARecord(t, "udp", udpAddr, "preview-1-2-3-4.example.test.", "1.2.3.4")
 	assertQueryARecord(t, "tcp", tcpAddr, "1-2-3-5-preview.example.test.", "1.2.3.5")
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("server returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for server shutdown")
+	}
+}
+
+func TestStartServesHTTPRedirectWhenConfigured(t *testing.T) {
+	cfg := testConfig()
+	cfg.ListenUDP = "127.0.0.1:0"
+	cfg.ListenTCP = "127.0.0.1:0"
+	cfg.ListenHTTP = "127.0.0.1:0"
+	cfg.RootRedirectURL = "https://pullpreview.com/?ref=xip"
+	srv := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start(ctx)
+	}()
+
+	_, _ = waitForListeners(t, srv, errCh)
+	httpAddr := waitForHTTPListener(t, srv, errCh)
+
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Get("http://" + httpAddr + "/anything?test=1")
+	if err != nil {
+		t.Fatalf("http request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected status %d, got %d", http.StatusFound, resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); got != cfg.RootRedirectURL {
+		t.Fatalf("expected Location %q, got %q", cfg.RootRedirectURL, got)
+	}
 
 	cancel()
 
@@ -358,6 +413,27 @@ func waitForListeners(t *testing.T, srv *Server, errCh <-chan error) (string, st
 
 	t.Fatalf("timed out waiting for UDP/TCP listeners")
 	return "", ""
+}
+
+func waitForHTTPListener(t *testing.T, srv *Server, errCh <-chan error) string {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("server failed before HTTP listener was ready: %v", err)
+		default:
+		}
+
+		if srv.httpLn != nil {
+			return srv.httpLn.Addr().String()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for HTTP listener")
+	return ""
 }
 
 func assertQueryARecord(t *testing.T, network, serverAddr, question, expectedA string) {
